@@ -13,6 +13,7 @@ from urllib3.exceptions import InsecureRequestWarning
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import base64
+import os  # Render ke liye environment variables ke liye
 
 # تجاهل تحذيرات SSL
 warnings.filterwarnings("ignore", category=InsecureRequestWarning)
@@ -27,8 +28,21 @@ init(autoreset=True)
 # تهيئة تطبيق Flask
 app = Flask(__name__)
 
-# تهيئة التخزين المؤقت
-cache = Cache(app, config={'CACHE_TYPE': 'simple'})  # In-memory cache
+# Render ke liye production-friendly cache configuration
+cache_config = {
+    'CACHE_TYPE': 'SimpleCache',  # SimpleCache Render par kaam karega
+    'CACHE_DEFAULT_TIMEOUT': 25200  # 7 hours
+}
+
+# Agar Redis available ho to use karein (optional)
+if os.environ.get('REDIS_URL'):
+    cache_config = {
+        'CACHE_TYPE': 'RedisCache',
+        'CACHE_REDIS_URL': os.environ.get('REDIS_URL'),
+        'CACHE_DEFAULT_TIMEOUT': 25200
+    }
+
+cache = Cache(app, config=cache_config)
 
 
 def get_token(password, uid):
@@ -48,11 +62,15 @@ def get_token(password, uid):
         "client_secret": "2ee44819e9b4598845141067b281621874d0d5d7af9d8f7e00c1e54715b7d1e3",
         "client_id": "100067"
     }
-    response = requests.post(url, headers=headers, data=data, verify=False, timeout=10)
-    if response.status_code != 200:
-        print(Fore.RED + f"Failed to retrieve token for UID {uid}: {response.text}")
+    try:
+        response = requests.post(url, headers=headers, data=data, verify=False, timeout=10)
+        if response.status_code != 200:
+            print(Fore.RED + f"Failed to retrieve token for UID {uid}: {response.text}")
+            return None
+        return response.json()
+    except Exception as e:
+        print(Fore.RED + f"Error getting token: {e}")
         return None
-    return response.json()
 
 
 def get_token_inspect_data(access_token):
@@ -82,11 +100,23 @@ def encrypt_message(key, iv, plaintext):
 
 def load_tokens(file_path, limit=None):
     try:
+        # Render par file path handle karna
+        if not os.path.exists(file_path):
+            # Try different paths
+            alt_paths = ['/opt/render/project/src/accs.txt', './accs.txt', 'accs.txt']
+            for path in alt_paths:
+                if os.path.exists(path):
+                    file_path = path
+                    break
+            else:
+                print(Fore.RED + "accs.txt file not found!")
+                return []
+        
         with open(file_path, 'r') as file:
             data = json.load(file)
             tokens = list(data.items())
             if limit is not None:
-                tokens = tokens[:limit]  # تحديد عدد التوكنات
+                tokens = tokens[:limit]
             return tokens
     except Exception as e:
         print(Fore.RED + f"Failed to load tokens: {e}")
@@ -353,12 +383,25 @@ def process_access_token(access_token, uid=None, platform_type=4):
         }
 
 
+@app.route('/', methods=['GET'])
+def home():
+    """Home endpoint to check if API is running"""
+    return jsonify({
+        "status": "online",
+        "message": "Free Fire Token API is running",
+        "endpoints": {
+            "/token": "GET - Get tokens (use ?access_token= or ?uid=&password= or ?limit=)",
+            "/api/get_jwt": "GET - Get JWT token (compatible endpoint)"
+        }
+    })
+
+
 @app.route('/token', methods=['GET'])
 def get_responses():
     # Check for access token first
     access_token = request.args.get('access_token')
     if access_token:
-        cache_key = f"access_token_{access_token}_{int(time.time())}"
+        cache_key = f"access_token_{access_token}"
         cached_response = cache.get(cache_key)
         if cached_response:
             return jsonify(cached_response)
@@ -372,7 +415,7 @@ def get_responses():
     password = request.args.get('password')
 
     if uid and password:
-        cache_key = f"token_{uid}_{password}_{int(time.time())}"
+        cache_key = f"token_{uid}_{password}"
         cached_response = cache.get(cache_key)
         if cached_response:
             return jsonify(cached_response)
@@ -381,18 +424,24 @@ def get_responses():
         cache.set(cache_key, response, timeout=25200)
         return jsonify(response)
 
-    # Bulk retrieval logic
-    limit = request.args.get('limit', default=500, type=int)
+    # Bulk retrieval logic - with better error handling for Render
+    limit = request.args.get('limit', default=10, type=int)  # Default limit kam kar diya
+    if limit > 50:  # Render par limit 50 tak rakho
+        limit = 50
+    
     tokens = load_tokens("accs.txt", limit)
+    if not tokens:
+        return jsonify({"error": "No tokens found or accs.txt not available"}), 404
+
     responses = []
 
-    with ThreadPoolExecutor(max_workers=20) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:  # Workers kam kar diye
         future_to_uid = {executor.submit(process_token, uid, password): uid for uid, password in tokens}
         for future in as_completed(future_to_uid):
             try:
                 response = future.result()
                 responses.append(response)
-                time.sleep(1)
+                time.sleep(0.5)  # Kam time diya
             except Exception as e:
                 responses.append({"uid": future_to_uid[future], "error": str(e)})
 
@@ -431,5 +480,17 @@ def get_jwt():
     }), 400
 
 
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({"error": "Endpoint not found"}), 404
+
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({"error": "Internal server error"}), 500
+
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5031)
+    # Render automatically sets PORT environment variable
+    port = int(os.environ.get('PORT', 5031))
+    app.run(host='0.0.0.0', port=port)
