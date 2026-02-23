@@ -13,7 +13,7 @@ from urllib3.exceptions import InsecureRequestWarning
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import base64
-import os  # Render ke liye environment variables ke liye
+import os
 
 # تجاهل تحذيرات SSL
 warnings.filterwarnings("ignore", category=InsecureRequestWarning)
@@ -28,18 +28,16 @@ init(autoreset=True)
 # تهيئة تطبيق Flask
 app = Flask(__name__)
 
-# Render ke liye production-friendly cache configuration
+# تهيئة التخزين المؤقت - استخدام Redis إذا كان متاحًا على Render
 cache_config = {
-    'CACHE_TYPE': 'SimpleCache',  # SimpleCache Render par kaam karega
-    'CACHE_DEFAULT_TIMEOUT': 25200  # 7 hours
+    'CACHE_TYPE': 'simple'  # استخدام ذاكرة التخزين المؤقت البسيطة
 }
 
-# Agar Redis available ho to use karein (optional)
+# محاولة استخدام Redis إذا كان متاحًا
 if os.environ.get('REDIS_URL'):
     cache_config = {
-        'CACHE_TYPE': 'RedisCache',
-        'CACHE_REDIS_URL': os.environ.get('REDIS_URL'),
-        'CACHE_DEFAULT_TIMEOUT': 25200
+        'CACHE_TYPE': 'redis',
+        'CACHE_REDIS_URL': os.environ.get('REDIS_URL')
     }
 
 cache = Cache(app, config=cache_config)
@@ -69,7 +67,7 @@ def get_token(password, uid):
             return None
         return response.json()
     except Exception as e:
-        print(Fore.RED + f"Error getting token: {e}")
+        print(Fore.RED + f"Error getting token for UID {uid}: {e}")
         return None
 
 
@@ -100,24 +98,24 @@ def encrypt_message(key, iv, plaintext):
 
 def load_tokens(file_path, limit=None):
     try:
-        # Render par file path handle karna
+        # التحقق من وجود الملف
         if not os.path.exists(file_path):
-            # Try different paths
-            alt_paths = ['/opt/render/project/src/accs.txt', './accs.txt', 'accs.txt']
-            for path in alt_paths:
-                if os.path.exists(path):
-                    file_path = path
-                    break
-            else:
-                print(Fore.RED + "accs.txt file not found!")
-                return []
-        
+            print(Fore.YELLOW + f"File {file_path} not found. Creating empty file.")
+            with open(file_path, 'w') as f:
+                f.write("{}")
+            return []
+            
         with open(file_path, 'r') as file:
             data = json.load(file)
             tokens = list(data.items())
             if limit is not None:
                 tokens = tokens[:limit]
             return tokens
+    except json.JSONDecodeError:
+        print(Fore.RED + f"Invalid JSON in {file_path}. Creating new file.")
+        with open(file_path, 'w') as f:
+            f.write("{}")
+        return []
     except Exception as e:
         print(Fore.RED + f"Failed to load tokens: {e}")
         return []
@@ -185,7 +183,7 @@ def process_token(uid, password):
     game_data.graphics_backend = "OpenGLES3"
     game_data.max_texture_units = 16383
     game_data.rendering_api = 4
-    game_data.encoded_field_89 = "\x10U\x15\x03\x02\t\rPYN\tEX\x03AZO9X\x07\rU\niZPVj\x05\rm\t\x04c"
+    game_data.encoded_field_89 = b"\x10U\x15\x03\x02\t\rPYN\tEX\x03AZO9X\x07\rU\niZPVj\x05\rm\t\x04c"
     game_data.field_92 = 8999
     game_data.marketplace = "3rd_party"
     game_data.encryption_key = "Jp2DT7F3Is55K/92LSJ4PWkJxZnMzSNn+HEBK2AFBDBdrLpWTA3bZjtbU3JbXigkIFFJ5ZJKi0fpnlJCPDD2A7h2aPQ="
@@ -209,7 +207,6 @@ def process_token(uid, password):
         'Connection': "Keep-Alive",
         'Accept-Encoding': "gzip",
         'Content-Type': "application/octet-stream",
-        'Expect': "100-continue",
         'X-Unity-Version': "2018.4.11f1",
         'X-GA': "v1 1",
         'ReleaseVersion': "OB52"
@@ -242,7 +239,7 @@ def process_token(uid, password):
         else:
             return {
                 "uid": uid,
-                "error": f"Failed to get response: HTTP {response.status_code}, {response.reason}"
+                "error": f"Failed to get response: HTTP {response.status_code}"
             }
     except requests.RequestException as e:
         return {
@@ -256,7 +253,7 @@ def process_access_token(access_token, uid=None, platform_type=4):
     # Inspect the access token first
     token_data = get_token_inspect_data(access_token)
     if not token_data:
-        return {"error": "INVALID_TOKEN", "message": "AccessToken invalid."}
+        return {"success": False, "error": "INVALID_TOKEN", "message": "AccessToken invalid."}
 
     open_id = token_data["open_id"]
     platform_type = token_data.get("platform", platform_type)
@@ -308,7 +305,7 @@ def process_access_token(access_token, uid=None, platform_type=4):
     game_data.graphics_backend = "OpenGLES3"
     game_data.max_texture_units = 16383
     game_data.rendering_api = 4
-    game_data.encoded_field_89 = "\x10U\x15\x03\x02\t\rPYN\tEX\x03AZO9X\x07\rU\niZPVj\x05\rm\t\x04c"
+    game_data.encoded_field_89 = b"\x10U\x15\x03\x02\t\rPYN\tEX\x03AZO9X\x07\rU\niZPVj\x05\rm\t\x04c"
     game_data.field_92 = 8999
     game_data.marketplace = "3rd_party"
     game_data.encryption_key = "Jp2DT7F3Is55K/92LSJ4PWkJxZnMzSNn+HEBK2AFBDBdrLpWTA3bZjtbU3JbXigkIFFJ5ZJKi0fpnlJCPDD2A7h2aPQ="
@@ -332,7 +329,6 @@ def process_access_token(access_token, uid=None, platform_type=4):
         'Connection': "Keep-Alive",
         'Accept-Encoding': "gzip",
         'Content-Type': "application/octet-stream",
-        'Expect': "100-continue",
         'X-Unity-Version': "2018.4.11f1",
         'X-GA': "v1 1",
         'ReleaseVersion': "OB52"
@@ -374,7 +370,7 @@ def process_access_token(access_token, uid=None, platform_type=4):
             else:
                 return {
                     "success": False,
-                    "error": f"Failed to get response: HTTP {response.status_code}, {response.reason}"
+                    "error": f"Failed to get response: HTTP {response.status_code}"
                 }
     except requests.RequestException as e:
         return {
@@ -385,15 +381,20 @@ def process_access_token(access_token, uid=None, platform_type=4):
 
 @app.route('/', methods=['GET'])
 def home():
-    """Home endpoint to check if API is running"""
     return jsonify({
-        "status": "online",
-        "message": "Free Fire Token API is running",
+        "name": "Free Fire JWT Generator API",
+        "version": "1.0",
         "endpoints": {
-            "/token": "GET - Get tokens (use ?access_token= or ?uid=&password= or ?limit=)",
-            "/api/get_jwt": "GET - Get JWT token (compatible endpoint)"
+            "/token": "GET - Generate JWT token (use ?access_token= or ?uid=&password= or ?limit=)",
+            "/api/get_jwt": "GET - Compatible endpoint for JWT generation",
+            "/health": "GET - Health check"
         }
     })
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "healthy", "timestamp": time.time()})
 
 
 @app.route('/token', methods=['GET'])
@@ -424,29 +425,27 @@ def get_responses():
         cache.set(cache_key, response, timeout=25200)
         return jsonify(response)
 
-    # Bulk retrieval logic - with better error handling for Render
-    limit = request.args.get('limit', default=10, type=int)  # Default limit kam kar diya
-    if limit > 50:  # Render par limit 50 tak rakho
-        limit = 50
-    
+    # Bulk retrieval logic
+    limit = request.args.get('limit', default=500, type=int)
     tokens = load_tokens("accs.txt", limit)
+    
     if not tokens:
-        return jsonify({"error": "No tokens found or accs.txt not available"}), 404
-
+        return jsonify({"error": "No accounts found in accs.txt", "tokens": []})
+    
     responses = []
 
-    with ThreadPoolExecutor(max_workers=5) as executor:  # Workers kam kar diye
+    with ThreadPoolExecutor(max_workers=10) as executor:  # Reduced workers for Render
         future_to_uid = {executor.submit(process_token, uid, password): uid for uid, password in tokens}
         for future in as_completed(future_to_uid):
             try:
                 response = future.result()
                 responses.append(response)
-                time.sleep(0.5)  # Kam time diya
+                time.sleep(0.5)  # Reduced sleep time
             except Exception as e:
                 responses.append({"uid": future_to_uid[future], "error": str(e)})
 
     token_list = [item['token'] for item in responses if 'token' in item]
-    return jsonify({"tokens": token_list})
+    return jsonify({"tokens": token_list, "total": len(token_list)})
 
 
 @app.route('/api/get_jwt', methods=['GET'])
@@ -480,17 +479,6 @@ def get_jwt():
     }), 400
 
 
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({"error": "Endpoint not found"}), 404
-
-
-@app.errorhandler(500)
-def internal_error(error):
-    return jsonify({"error": "Internal server error"}), 500
-
-
 if __name__ == '__main__':
-    # Render automatically sets PORT environment variable
-    port = int(os.environ.get('PORT', 5031))
-    app.run(host='0.0.0.0', port=port)
+    port = int(os.environ.get('PORT', 5031))  # Render uses PORT environment variable
+    app.run(host='0.0.0.0', port=port, debug=False)
