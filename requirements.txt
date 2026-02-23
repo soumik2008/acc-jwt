@@ -1,7 +1,8 @@
-Flask==2.3.2
-Flask-Caching==2.0.2
+Flask==2.3.3
+Flask-Caching==2.1.0
 requests==2.31.0
 pycryptodome==3.19.0
+protobuf==3.20.3
 colorama==0.4.6
-protobuf==4.24.4
-PyJWT==2.8.0
+gunicorn==21.2.0
+urllib3==1.26.18
