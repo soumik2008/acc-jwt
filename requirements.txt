@@ -1,9 +1,0 @@
-flask==2.3.3
-flask-caching==2.1.0
-requests==2.31.0
-pycryptodome==3.19.1
-colorama==0.4.6
-protobuf==3.20.3
-urllib3==1.26.18
-warnings
-concurrent-futures==3.1.1
